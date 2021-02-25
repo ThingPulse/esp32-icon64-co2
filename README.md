@@ -8,3 +8,21 @@ When the second threshold is reached the colors switch to red and an accoustic s
 The button on the Icon64 can be used to turn of the accoustic signal.
 
 This is firmware is made for the [ThingPulse Icon64](https://thingpulse.com/product/icon64/) devices.
+
+## Settings
+
+The following values in main.cpp can be adjusted to change the threshold values:
+
+```
+#define CO2_WARN_LEVEL 700
+#define CO2_ALERT_LEVEL 850
+```
+
+## Button
+
+The button can be used to turn off accustic warnings.
+
+## Photos
+
+![Regular Level](/resources/RegularLevel.jpeg)
+![Alert](/resources/FirstAlert.jpeg)
