@@ -1,5 +1,6 @@
 #include <Arduino.h>
-#include "MHZ19.h"                                        
+#include "SPIFFS.h"
+#include "MHZ19.h"
 #include <SoftwareSerial.h>                                // Remove if using HardwareSerial
 #include <FastLED.h>
 #include <EasyButton.h>
@@ -9,12 +10,17 @@
 #include "sounds.h"
 #include "icons.h"
 
+
+// ********* user settings *********
+int co2WarnLevel = 700;   // unit: ppm
+int co2AlertLevel = 850;  // unit: ppm
+float volume = 0.5;       // {0.0,4.0}
+// ********* END user settings *********
+
+
 #define RX_PIN 21                                          // Rx pin which the MHZ19 Tx pin is attached to
 #define TX_PIN 23                                          // Tx pin which the MHZ19 Rx pin is attached to
-#define BAUDRATE 9600  
-
-#define CO2_WARN_LEVEL 700
-#define CO2_ALERT_LEVEL 850
+#define BAUDRATE 9600
 
 // LED Settings
 #define NUM_LEDS      64
@@ -49,45 +55,113 @@ uint32_t lastSoundPlayed = 0;
 bool isMuted = false;
 bool showMuteState = false;
 
-int CO2; 
+int CO2;
 
-void onButtonPressed() {
-  isMuted = !isMuted;
-  showMuteState = true;
-  log_d("Is muted: %d", isMuted);
+
+// ********* forward declarations *********
+void buttonISR();
+void drawDigit(uint8_t x, uint8_t y, uint8_t number, CRGB foregroundColor);
+void drawDouble(double value, CRGB foregroundColor);
+void drawIcon(const uint32_t *icon);
+uint8_t getLedIndex(uint8_t x, uint8_t y);
+void loadPropertiesFromSpiffs();
+void onButtonPressed();
+void playBootupSound();
+// ********* END forward declarations *********
+
+
+void setup() {
+    Serial.begin(115200);                                     // Device to serial monitor feedback
+    delay(1000);
+    loadPropertiesFromSpiffs();
+
+    pinMode(MODE_PIN, OUTPUT);
+    pinMode(PUSH_BUTTON, INPUT);
+    digitalWrite(MODE_PIN, HIGH);
+
+    mySerial.begin(BAUDRATE);                               // (Uno example) device to MH-Z19 serial start
+    myMHZ19.begin(mySerial);                                // *Serial(Stream) refence must be passed to library begin().
+
+    myMHZ19.autoCalibration();                              // Turn auto calibration ON (OFF autoCalibration(false))
+
+    in = new AudioFileSourcePROGMEM(sound, sizeof(sound));
+    aac = new AudioGeneratorAAC();
+    out = new AudioOutputI2S();
+    out->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT );
+    out->SetGain(volume);
+    playBootupSound();
+    FastLED.addLeds<WS2812B, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
+
+    // init button and attach callbacks
+    button.begin();
+    button.onPressed(onButtonPressed);
+    if (button.supportsInterrupt()) {
+      button.enableInterrupt(buttonISR);
+      log_i("Button will be used through interrupts");
+    }
 }
+
+void loop() {
+  if (millis() - getDataTimer >= 2000) {
+
+    /* note: getCO2() default is command "CO2 Unlimited". This returns the correct CO2 reading even
+    if below background CO2 levels or above range (useful to validate sensor). You can use the
+    usual documented command with getCO2(false) */
+
+    CO2 = myMHZ19.getCO2();                             // Request CO2 (as ppm)
+
+    log_i("CO2 (ppm): %d", CO2);
+
+    int8_t Temp;
+    Temp = myMHZ19.getTemperature();                     // Request Temperature (as Celsius)
+    log_i("Temperature (C): %d", Temp);
+
+    getDataTimer = millis();
+  }
+  FastLED.clear();
+  FastLED.setBrightness(BRIGHTNESS);
+  if (showMuteState) {
+    if (isMuted) {
+      drawIcon(VOL_OFF);
+    } else {
+      drawIcon(VOL_ON);
+    }
+    delay(2000);
+    showMuteState = false;
+  } else {
+    CRGB backgroundColor;
+    CRGB foregroundColor;
+    if (CO2 < co2WarnLevel) {
+      backgroundColor = CRGB::Green;
+      foregroundColor = CRGB::White;
+    } else if (CO2 < co2AlertLevel) {
+      backgroundColor = (millis() / 500) % 2 == 0 ? CRGB::Yellow  : CRGB::Black;
+      foregroundColor = CRGB::Green;
+    } else {
+      backgroundColor = (millis() / 250) % 2 == 0 ? CRGB::Red  : CRGB::Black;
+      foregroundColor = CRGB::White;
+      if (!isMuted && millis() - lastSoundPlayed > MIN_SOUND_INTERVAL_MILLIS) {
+        playBootupSound();
+        lastSoundPlayed = millis();
+      }
+    }
+
+    for (int i = 0; i < 64; i++) {
+      leds[i] = backgroundColor;
+    }
+
+    drawDouble(CO2 / 1000.0, foregroundColor);
+  }
+  FastLED.show();
+}
+
 
 void buttonISR() {
   button.read();
 }
 
-void playBootupSound() {
-  log_d("Sound %d", sizeof(sound));
-  log_d("Playing sound");
-  in->open(sound, sizeof(sound));
-  aac->begin(in, out);
-
-  while (aac->isRunning()) {
-
-    aac->loop();
-  }
-  aac->stop();
-
-  in->close();
-  log_d("Finished sound");
-}
-
-uint8_t getLedIndex(uint8_t x, uint8_t y) {
-  if (x % 2 == 1) {
-    return 63 - (y + x * 8);
-  } else {
-    return 63 - (7 - y + x * 8);
-  }
-}
-
 void drawDigit(uint8_t x, uint8_t y, uint8_t number, CRGB foregroundColor) {
   number = number % 10;
-
   uint8_t bitNumber = 0;
   for (uint8_t yk = 0; yk < 5; yk++) {
     for (uint8_t xk = 3; xk > 0; xk--) {
@@ -96,7 +170,7 @@ void drawDigit(uint8_t x, uint8_t y, uint8_t number, CRGB foregroundColor) {
         leds[getLedIndex(xk + x, yk + y)] = foregroundColor;
       }
       bitNumber++;
-    }  
+    }
   }
 }
 
@@ -111,13 +185,12 @@ void drawDouble(double value, CRGB foregroundColor) {
   } else {
     uint8_t decimal = ((int)(value * 10)) % 10;
     uint8_t centimal = value;
-      
+
     drawDigit(-1, 2, centimal, foregroundColor);
     drawDigit(4, 2, decimal, foregroundColor);
     leds[getLedIndex(4, 2)] = foregroundColor;
     leds[getLedIndex(4, 1)] = foregroundColor;
   }
-
 }
 
 void drawIcon(const uint32_t *icon) {
@@ -130,96 +203,62 @@ void drawIcon(const uint32_t *icon) {
   }
   delay(1);
   FastLED.show();
-
 }
 
-void setup() {
-    Serial.begin(115200);                                     // Device to serial monitor feedback
-    pinMode(MODE_PIN, OUTPUT);
-    pinMode(PUSH_BUTTON, INPUT);
-    digitalWrite(MODE_PIN, HIGH);
-
-    mySerial.begin(BAUDRATE);                               // (Uno example) device to MH-Z19 serial start   
-    myMHZ19.begin(mySerial);                                // *Serial(Stream) refence must be passed to library begin(). 
-
-    myMHZ19.autoCalibration();                              // Turn auto calibration ON (OFF autoCalibration(false))
-
-    in = new AudioFileSourcePROGMEM(sound, sizeof(sound));
-    aac = new AudioGeneratorAAC();
-    out = new AudioOutputI2S();
-    out->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT );
-    out->SetGain(0.5);
-    playBootupSound();
-    FastLED.addLeds<WS2812B, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-
-    // init button and attach callbacks
-    button.begin();
-    button.onPressed(onButtonPressed);
-    if (button.supportsInterrupt()) {
-      button.enableInterrupt(buttonISR);
-      Serial.println("Button will be used through interrupts");
-    }
+uint8_t getLedIndex(uint8_t x, uint8_t y) {
+  if (x % 2 == 1) {
+    return 63 - (y + x * 8);
+  } else {
+    return 63 - (7 - y + x * 8);
+  }
 }
 
-
-void loop()
-{
-    if (millis() - getDataTimer >= 2000) {
-
-        /* note: getCO2() default is command "CO2 Unlimited". This returns the correct CO2 reading even 
-        if below background CO2 levels or above range (useful to validate sensor). You can use the 
-        usual documented command with getCO2(false) */
-
-        CO2 = myMHZ19.getCO2();                             // Request CO2 (as ppm)
-        
-        Serial.print("CO2 (ppm): ");                      
-        Serial.println(CO2);                                
-
-        int8_t Temp;
-        Temp = myMHZ19.getTemperature();                     // Request Temperature (as Celsius)
-        Serial.print("Temperature (C): ");                  
-        Serial.println(Temp);                               
-
-        getDataTimer = millis();
-    }
-    FastLED.clear();
-    FastLED.setBrightness(BRIGHTNESS);
-    if (showMuteState) {
-      if (isMuted) {
-        drawIcon(VOL_OFF);
-      } else {
-        drawIcon(VOL_ON);
-      }
-      delay(2000);
-      showMuteState = false;
-    } else {
-      CRGB backgroundColor;
-      CRGB foregroundColor;
-      if (CO2 < CO2_WARN_LEVEL) {
-        backgroundColor = CRGB::Green;
-        foregroundColor = CRGB::White;
-      } else if (CO2 < CO2_ALERT_LEVEL) {
-        backgroundColor = (millis() / 500) % 2 == 0 ? CRGB::Yellow  : CRGB::Black;
-        foregroundColor = CRGB::Green;
-
-      } else {
-        backgroundColor = (millis() / 250) % 2 == 0 ? CRGB::Red  : CRGB::Black;
-        foregroundColor = CRGB::White;
-        if (!isMuted && millis() - lastSoundPlayed > MIN_SOUND_INTERVAL_MILLIS) {
-          playBootupSound();
-          lastSoundPlayed = millis();
+void loadPropertiesFromSpiffs() {
+  if (SPIFFS.begin()) {
+    log_i("Attempting to read application.properties file from SPIFFS.");
+    File f = SPIFFS.open("/application.properties");
+    if (f) {
+      log_i("File exists. Reading and assigning properties.");
+      while (f.available()) {
+        String key = f.readStringUntil('=');
+        String value = f.readStringUntil('\n');
+        if (key == "co2WarnLevel") {
+          co2WarnLevel = value.toInt();
+          log_i("Using 'co2WarnLevel' from SPIFFS");
+        } else if (key == "co2AlertLevel") {
+          co2AlertLevel = value.toInt();
+          log_i("Using 'co2AlertLevel' from SPIFFS");
+        } else if (key == "volume") {
+          volume = value.toFloat();
+          log_i("Using 'volume' from SPIFFS");
         }
-
       }
-
-
-      for (int i = 0; i < 64; i++) {
-        leds[i] = backgroundColor;
-      }
-
-      drawDouble(CO2 / 1000.0, foregroundColor);
     }
-    FastLED.show();
-    
+    f.close();
+    log_i("Effective properties now as follows:");
+    log_i("\tco2WarnLevel: %d", co2WarnLevel);
+    log_i("\tco2AlertLevel: %d", co2AlertLevel);
+    log_i("\tvolume: %f", volume);
+  } else {
+    log_w("SPIFFS mount failed.");
+  }
+}
 
+void onButtonPressed() {
+  isMuted = !isMuted;
+  showMuteState = true;
+  log_d("Is muted: %d", isMuted);
+}
+
+void playBootupSound() {
+  log_d("Sound %d", sizeof(sound));
+  log_d("Playing sound");
+  in->open(sound, sizeof(sound));
+  aac->begin(in, out);
+  while (aac->isRunning()) {
+    aac->loop();
+  }
+  aac->stop();
+  in->close();
+  log_d("Finished sound");
 }
