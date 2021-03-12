@@ -135,10 +135,10 @@ void loop() {
       backgroundColor = CRGB::Green;
       foregroundColor = CRGB::White;
     } else if (CO2 < co2AlertLevel) {
-      backgroundColor = (millis() / 500) % 2 == 0 ? CRGB::Yellow  : CRGB::Black;
+      backgroundColor = (millis() / 600) % 2 == 0 ? CRGB::Yellow  : CRGB::Black;
       foregroundColor = CRGB::Green;
     } else {
-      backgroundColor = (millis() / 250) % 2 == 0 ? CRGB::Red  : CRGB::Black;
+      backgroundColor = (millis() / 200) % 2 == 0 ? CRGB::Red  : CRGB::Black;
       foregroundColor = CRGB::White;
       if (!isMuted && millis() - lastSoundPlayed > MIN_SOUND_INTERVAL_MILLIS) {
         playBootupSound();
@@ -153,6 +153,7 @@ void loop() {
     drawDouble(CO2 / 1000.0, foregroundColor);
   }
   FastLED.show();
+  delay(200);
 }
 
 
@@ -176,6 +177,8 @@ void drawDigit(uint8_t x, uint8_t y, uint8_t number, CRGB foregroundColor) {
 
 void drawDouble(double value, CRGB foregroundColor) {
   if (value < 1) {
+    // round to 2 fractional digits as we display 2
+    value = round(value * 100.0) / 100.0;
     leds[getLedIndex(0, 2)] = foregroundColor;
     leds[getLedIndex(0, 1)] = foregroundColor;
     uint8_t firstDigit = ((int)(value * 10)) % 10;
@@ -183,6 +186,8 @@ void drawDouble(double value, CRGB foregroundColor) {
     drawDigit(0, 2, firstDigit, foregroundColor);
     drawDigit(4, 2, secondDigit, foregroundColor);
   } else {
+    // round to 1 fractional digit as we display only 1
+    value = round(value * 10.0) / 10.0;
     uint8_t decimal = ((int)(value * 10)) % 10;
     uint8_t centimal = value;
 
