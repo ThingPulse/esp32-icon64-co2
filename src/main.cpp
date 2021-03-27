@@ -12,9 +12,10 @@
 
 
 // ********* user settings *********
-int co2WarnLevel = 700;   // unit: ppm
-int co2AlertLevel = 850;  // unit: ppm
-float volume = 0.5;       // {0.0,4.0}
+int co2WarnLevel = 850;   // unit: ppm
+int co2AlertLevel = 1000; // unit: ppm
+float volume = 0.5;       // {0.0, 4.0}
+int brightness = 50;      // {0, 255}
 // ********* END user settings *********
 
 
@@ -25,7 +26,6 @@ float volume = 0.5;       // {0.0,4.0}
 // LED Settings
 #define NUM_LEDS      64
 #define DATA_PIN      32                                    // Device to MH-Z19 Serial baudrate (should not be changed)
-#define BRIGHTNESS    20
 #define COLOR_ORDER   GRB
 
 // Audio Settings
@@ -119,7 +119,7 @@ void loop() {
     getDataTimer = millis();
   }
   FastLED.clear();
-  FastLED.setBrightness(BRIGHTNESS);
+  FastLED.setBrightness(brightness);
   if (showMuteState) {
     if (isMuted) {
       drawIcon(VOL_OFF);
@@ -236,6 +236,9 @@ void loadPropertiesFromSpiffs() {
         } else if (key == "volume") {
           volume = value.toFloat();
           log_i("Using 'volume' from SPIFFS");
+        } else if (key == "brightness") {
+          brightness = value.toInt();
+          log_i("Using 'brightness' from SPIFFS");
         }
       }
     }
