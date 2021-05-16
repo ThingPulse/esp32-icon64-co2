@@ -1,31 +1,28 @@
 #include <Arduino.h>
 #include "SPIFFS.h"
-#include "MHZ19.h"
-#include <SoftwareSerial.h>                                // Remove if using HardwareSerial
 #include <FastLED.h>
 #include <EasyButton.h>
 #include "AudioGeneratorAAC.h"
 #include "AudioOutputI2S.h"
 #include "AudioFileSourcePROGMEM.h"
-#include "sounds.h"
+#include "co2_mhz19.h"
+#include "co2_scd4x.h"
 #include "icons.h"
+#include "sounds.h"
 
 
 // ********* user settings *********
-int co2WarnLevel = 850;   // unit: ppm
-int co2AlertLevel = 1000; // unit: ppm
-float volume = 0.5;       // {0.0, 4.0}
-int brightness = 50;      // {0, 255}
+int co2WarnLevel = 850;     // unit: ppm
+int co2AlertLevel = 1000;   // unit: ppm
+float volume = 0.5;         // {0.0, 4.0}
+int brightness = 50;        // {0, 255}
+String co2Sensor = "mhz19"; // [mhz19, scd4x]
 // ********* END user settings *********
 
 
-#define RX_PIN 21                                          // Rx pin which the MHZ19 Tx pin is attached to
-#define TX_PIN 23                                          // Tx pin which the MHZ19 Rx pin is attached to
-#define BAUDRATE 9600
-
 // LED Settings
 #define NUM_LEDS      64
-#define DATA_PIN      32                                    // Device to MH-Z19 Serial baudrate (should not be changed)
+#define DATA_PIN      32
 #define COLOR_ORDER   GRB
 
 // Audio Settings
@@ -36,9 +33,6 @@ int brightness = 50;      // {0, 255}
 
 #define PUSH_BUTTON   39
 #define MIN_SOUND_INTERVAL_MILLIS 1000 * 10
-
-MHZ19 myMHZ19;                                             // Constructor for library
-SoftwareSerial mySerial(RX_PIN, TX_PIN);                   // (Uno example) create device to MH-Z19 serial
 
 unsigned long getDataTimer = 0;
 uint16_t numbers[10] = {0x7B6F, 0x1249, 0x73E7, 0x73CF, 0x5BC9, 0x79CF,0x79EF, 0x7249, 0x7BEF, 0x7BCF};
@@ -55,8 +49,7 @@ uint32_t lastSoundPlayed = 0;
 bool isMuted = false;
 bool showMuteState = false;
 
-int CO2;
-
+int co2Level;
 
 // ********* forward declarations *********
 void buttonISR();
@@ -64,58 +57,46 @@ void drawDigit(uint8_t x, uint8_t y, uint8_t number, CRGB foregroundColor);
 void drawDouble(double value, CRGB foregroundColor);
 void drawIcon(const uint32_t *icon);
 uint8_t getLedIndex(uint8_t x, uint8_t y);
+void initCo2Sensor();
 void loadPropertiesFromSpiffs();
+int measureCo2Level();
 void onButtonPressed();
 void playBootupSound();
 // ********* END forward declarations *********
 
 
 void setup() {
-    Serial.begin(115200);                                     // Device to serial monitor feedback
-    delay(1000);
-    loadPropertiesFromSpiffs();
+  Serial.begin(115200);                                     // Device to serial monitor feedback
+  delay(4000);
+  loadPropertiesFromSpiffs();
 
-    pinMode(MODE_PIN, OUTPUT);
-    pinMode(PUSH_BUTTON, INPUT);
-    digitalWrite(MODE_PIN, HIGH);
+  pinMode(MODE_PIN, OUTPUT);
+  pinMode(PUSH_BUTTON, INPUT);
+  digitalWrite(MODE_PIN, HIGH);
 
-    mySerial.begin(BAUDRATE);                               // (Uno example) device to MH-Z19 serial start
-    myMHZ19.begin(mySerial);                                // *Serial(Stream) refence must be passed to library begin().
+  in = new AudioFileSourcePROGMEM(sound, sizeof(sound));
+  aac = new AudioGeneratorAAC();
+  out = new AudioOutputI2S();
+  out->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT );
+  out->SetGain(volume);
+  playBootupSound();
+  FastLED.addLeds<WS2812B, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
 
-    myMHZ19.autoCalibration();                              // Turn auto calibration ON (OFF autoCalibration(false))
+  // init button and attach callbacks
+  button.begin();
+  button.onPressed(onButtonPressed);
+  if (button.supportsInterrupt()) {
+    button.enableInterrupt(buttonISR);
+    log_i("Button will be used through interrupts");
+  }
 
-    in = new AudioFileSourcePROGMEM(sound, sizeof(sound));
-    aac = new AudioGeneratorAAC();
-    out = new AudioOutputI2S();
-    out->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT );
-    out->SetGain(volume);
-    playBootupSound();
-    FastLED.addLeds<WS2812B, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-
-    // init button and attach callbacks
-    button.begin();
-    button.onPressed(onButtonPressed);
-    if (button.supportsInterrupt()) {
-      button.enableInterrupt(buttonISR);
-      log_i("Button will be used through interrupts");
-    }
+  initCo2Sensor();
 }
 
 void loop() {
-  if (millis() - getDataTimer >= 2000) {
-
-    /* note: getCO2() default is command "CO2 Unlimited". This returns the correct CO2 reading even
-    if below background CO2 levels or above range (useful to validate sensor). You can use the
-    usual documented command with getCO2(false) */
-
-    CO2 = myMHZ19.getCO2();                             // Request CO2 (as ppm)
-
-    log_i("CO2 (ppm): %d", CO2);
-
-    int8_t Temp;
-    Temp = myMHZ19.getTemperature();                     // Request Temperature (as Celsius)
-    log_i("Temperature (C): %d", Temp);
-
+  if (millis() - getDataTimer >= 5000) {
+    co2Level = measureCo2Level();
+    log_i("CO2 (ppm): %d", co2Level);
     getDataTimer = millis();
   }
   FastLED.clear();
@@ -131,10 +112,10 @@ void loop() {
   } else {
     CRGB backgroundColor;
     CRGB foregroundColor;
-    if (CO2 < co2WarnLevel) {
+    if (co2Level < co2WarnLevel) {
       backgroundColor = CRGB::Green;
       foregroundColor = CRGB::White;
-    } else if (CO2 < co2AlertLevel) {
+    } else if (co2Level < co2AlertLevel) {
       backgroundColor = (millis() / 600) % 2 == 0 ? CRGB::Yellow  : CRGB::Black;
       foregroundColor = CRGB::Green;
     } else {
@@ -150,12 +131,11 @@ void loop() {
       leds[i] = backgroundColor;
     }
 
-    drawDouble(CO2 / 1000.0, foregroundColor);
+    drawDouble(co2Level / 1000.0, foregroundColor);
   }
   FastLED.show();
   delay(200);
 }
-
 
 void buttonISR() {
   button.read();
@@ -210,6 +190,14 @@ void drawIcon(const uint32_t *icon) {
   FastLED.show();
 }
 
+void initCo2Sensor() {
+  if (co2Sensor.equals("mhz19")) {
+    initMhz19();
+  } else if (co2Sensor.equals("scd4x")) {
+    initScd4x();
+  }
+}
+
 uint8_t getLedIndex(uint8_t x, uint8_t y) {
   if (x % 2 == 1) {
     return 63 - (y + x * 8);
@@ -227,7 +215,10 @@ void loadPropertiesFromSpiffs() {
       while (f.available()) {
         String key = f.readStringUntil('=');
         String value = f.readStringUntil('\n');
-        if (key == "co2WarnLevel") {
+        if (key == "co2Sensor") {
+          co2Sensor = value;
+          log_i("Using 'co2Sensor' from SPIFFS");
+        } else if (key == "co2WarnLevel") {
           co2WarnLevel = value.toInt();
           log_i("Using 'co2WarnLevel' from SPIFFS");
         } else if (key == "co2AlertLevel") {
@@ -244,11 +235,22 @@ void loadPropertiesFromSpiffs() {
     }
     f.close();
     log_i("Effective properties now as follows:");
+    log_i("\tco2Sensor: %s", co2Sensor);
     log_i("\tco2WarnLevel: %d", co2WarnLevel);
     log_i("\tco2AlertLevel: %d", co2AlertLevel);
     log_i("\tvolume: %f", volume);
   } else {
     log_w("SPIFFS mount failed.");
+  }
+}
+
+int measureCo2Level() {
+  if (co2Sensor.equals("mhz19")) {
+    return readFromMhz19();
+  } else if (co2Sensor.equals("scd4x")) {
+    return readFromScd4x();
+  } else {
+    return 0;
   }
 }
 
