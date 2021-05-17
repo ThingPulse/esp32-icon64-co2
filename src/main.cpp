@@ -49,12 +49,13 @@ uint32_t lastSoundPlayed = 0;
 bool isMuted = false;
 bool showMuteState = false;
 
-int co2Level;
+int co2Level;   // in ppm, as provided by the sensor
+float co2Value; // rounded and reduced value as rendered on the LED matrix
 
 // ********* forward declarations *********
 void buttonISR();
+void drawCo2Value(CRGB foregroundColor);
 void drawDigit(uint8_t x, uint8_t y, uint8_t number, CRGB foregroundColor);
-void drawDouble(double value, CRGB foregroundColor);
 void drawIcon(const uint32_t *icon);
 uint8_t getLedIndex(uint8_t x, uint8_t y);
 void initCo2Sensor();
@@ -66,7 +67,7 @@ void playBootupSound();
 
 
 void setup() {
-  Serial.begin(115200);                                     // Device to serial monitor feedback
+  Serial.begin(115200);
   delay(4000);
   loadPropertiesFromSpiffs();
 
@@ -96,8 +97,19 @@ void setup() {
 void loop() {
   if (millis() - getDataTimer >= 5000) {
     co2Level = measureCo2Level();
-    log_i("CO2 (ppm): %d", co2Level);
+    co2Value = co2Level / 1000.0;
     getDataTimer = millis();
+    if (co2Value < 0.995) {
+      // round to 2 fractional digits as we display 2, >=0.995 is rounded up to 1.0
+      // Value 0.994000, rounded value 0.990000 -> display ',99'
+      // ----
+      // Value 0.995000, rounded value 1.000000 -> display '1,0'
+      co2Value = round(co2Value * 100.0) / 100.0;
+    } else {
+      // round to 1 fractional digit as we display only 1
+      co2Value = round(co2Value * 10.0) / 10.0;
+    }
+    log_i("CO2 (ppm): %d, rounded value: %f", co2Level, co2Value);
   }
   FastLED.clear();
   FastLED.setBrightness(brightness);
@@ -131,7 +143,7 @@ void loop() {
       leds[i] = backgroundColor;
     }
 
-    drawDouble(co2Level / 1000.0, foregroundColor);
+    drawCo2Value(foregroundColor);
   }
   FastLED.show();
   delay(200);
@@ -155,24 +167,23 @@ void drawDigit(uint8_t x, uint8_t y, uint8_t number, CRGB foregroundColor) {
   }
 }
 
-void drawDouble(double value, CRGB foregroundColor) {
-  if (value < 1) {
-    // round to 2 fractional digits as we display 2
-    value = round(value * 100.0) / 100.0;
-    leds[getLedIndex(0, 2)] = foregroundColor;
-    leds[getLedIndex(0, 1)] = foregroundColor;
-    uint8_t firstDigit = ((int)(value * 10)) % 10;
-    uint8_t secondDigit = ((int)(value * 100)) % 10;
+void drawCo2Value(CRGB foregroundColor) {
+  if (co2Value < 1) {
+    uint8_t firstDigit = ((int)(co2Value * 10)) % 10;
+    uint8_t secondDigit = ((int)(co2Value * 100)) % 10;
+
     drawDigit(0, 2, firstDigit, foregroundColor);
     drawDigit(4, 2, secondDigit, foregroundColor);
+    // draw comma as decimal separator
+    leds[getLedIndex(0, 2)] = foregroundColor;
+    leds[getLedIndex(0, 1)] = foregroundColor;
   } else {
-    // round to 1 fractional digit as we display only 1
-    value = round(value * 10.0) / 10.0;
-    uint8_t decimal = ((int)(value * 10)) % 10;
-    uint8_t centimal = value;
+    uint8_t decimal = ((int)(co2Value * 10)) % 10;
+    uint8_t centimal = co2Value;
 
     drawDigit(-1, 2, centimal, foregroundColor);
     drawDigit(4, 2, decimal, foregroundColor);
+    // draw comma as decimal separator
     leds[getLedIndex(4, 2)] = foregroundColor;
     leds[getLedIndex(4, 1)] = foregroundColor;
   }
