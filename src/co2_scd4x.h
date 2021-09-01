@@ -3,8 +3,8 @@
 #include <SensirionI2CScd4x.h>
 #include <Wire.h>
 
-#define I2C_SDA 18
-#define I2C_SCL 19
+#define I2C_SDA 21
+#define I2C_SCL 23
 
 SensirionI2CScd4x scd4x;
 
