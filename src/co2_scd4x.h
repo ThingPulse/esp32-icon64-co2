@@ -3,6 +3,8 @@
 #include <SensirionI2CScd4x.h>
 #include <Wire.h>
 
+#include "bleGadget.h"
+
 #define I2C_SDA 21
 #define I2C_SCL 23
 
@@ -27,6 +29,7 @@ void initScd4x() {
   Wire.setPins(I2C_SDA, I2C_SCL);
   bool wireBegin = Wire.begin();
   Serial.println("I2C begin successful: " + String(wireBegin));
+
 
   uint16_t error;
   char errorMessage[256];
@@ -87,6 +90,8 @@ int readFromScd4x() {
       Serial.print("\t");
       Serial.print("Humidity:");
       Serial.println(humidity);
+
+      writeToBleGadget(co2, temperature, humidity);
   }
   return co2;
 }

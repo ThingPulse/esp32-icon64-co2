@@ -15,7 +15,7 @@
 int co2WarnLevel = 850;     // unit: ppm
 int co2AlertLevel = 1000;   // unit: ppm
 float volume = 0.5;         // {0.0, 4.0}
-int brightness = 50;        // {0, 255}
+int brightness = 80;        // {0, 255}
 String co2Sensor = "mhz19"; // [mhz19, scd4x]
 // ********* END user settings *********
 
@@ -34,7 +34,14 @@ String co2Sensor = "mhz19"; // [mhz19, scd4x]
 #define PUSH_BUTTON   39
 #define MIN_SOUND_INTERVAL_MILLIS 1000 * 10
 
-unsigned long getDataTimer = 0;
+// Variables to keep track of when the last action was triggered from loop() in order to achieve
+// the intervals defined right below. Variables contain millis() values.
+unsigned long acquireDataLoopTimer = 0;
+unsigned long ledLoopTimer = 0;
+// Intervals at which data acquisition and LED update is activated in loop()
+short acquireDataIntervalMs = 5000;
+short ledUpdateIntervalMs = 200;
+
 uint16_t numbers[10] = {0x7B6F, 0x1249, 0x73E7, 0x73CF, 0x5BC9, 0x79CF,0x79EF, 0x7249, 0x7BEF, 0x7BCF};
 
 CRGB leds[NUM_LEDS];
@@ -91,14 +98,15 @@ void setup() {
     log_i("Button will be used through interrupts");
   }
 
+  initBleGadget();
   initCo2Sensor();
 }
 
 void loop() {
-  if (millis() - getDataTimer >= 5000) {
+  if (millis() - acquireDataLoopTimer >= acquireDataIntervalMs) {
+    acquireDataLoopTimer = millis();
     co2Level = measureCo2Level();
     co2Value = co2Level / 1000.0;
-    getDataTimer = millis();
     if (co2Value < 0.995) {
       // round to 2 fractional digits as we display 2, >=0.995 is rounded up to 1.0
       // Value 0.994000, rounded value 0.990000 -> display ',99'
@@ -111,42 +119,46 @@ void loop() {
     }
     log_i("CO2 (ppm): %d, rounded value: %f", co2Level, co2Value);
   }
-  FastLED.clear();
-  FastLED.setBrightness(brightness);
-  if (showMuteState) {
-    if (isMuted) {
-      drawIcon(VOL_OFF);
-    } else {
-      drawIcon(VOL_ON);
-    }
-    delay(2000);
-    showMuteState = false;
-  } else {
-    CRGB backgroundColor;
-    CRGB foregroundColor;
-    if (co2Level < co2WarnLevel) {
-      backgroundColor = CRGB::Green;
-      foregroundColor = CRGB::White;
-    } else if (co2Level < co2AlertLevel) {
-      backgroundColor = (millis() / 600) % 2 == 0 ? CRGB::Yellow  : CRGB::Black;
-      foregroundColor = CRGB::Green;
-    } else {
-      backgroundColor = (millis() / 200) % 2 == 0 ? CRGB::Red  : CRGB::Black;
-      foregroundColor = CRGB::White;
-      if (!isMuted && millis() - lastSoundPlayed > MIN_SOUND_INTERVAL_MILLIS) {
-        playBootupSound();
-        lastSoundPlayed = millis();
+  if (millis() - ledLoopTimer >= ledUpdateIntervalMs) {
+    ledLoopTimer = millis();
+    FastLED.clear();
+    FastLED.setBrightness(brightness);
+    if (showMuteState) {
+      if (isMuted) {
+        drawIcon(VOL_OFF);
+      } else {
+        drawIcon(VOL_ON);
       }
-    }
+      delay(2000);
+      showMuteState = false;
+    } else {
+      CRGB backgroundColor;
+      CRGB foregroundColor;
+      if (co2Level < co2WarnLevel) {
+        backgroundColor = CRGB::Green;
+        foregroundColor = CRGB::White;
+      } else if (co2Level < co2AlertLevel) {
+        backgroundColor = (millis() / 600) % 2 == 0 ? CRGB::Yellow  : CRGB::Black;
+        foregroundColor = CRGB::Green;
+      } else {
+        backgroundColor = (millis() / 200) % 2 == 0 ? CRGB::Red  : CRGB::Black;
+        foregroundColor = CRGB::White;
+        if (!isMuted && millis() - lastSoundPlayed > MIN_SOUND_INTERVAL_MILLIS) {
+          playBootupSound();
+          lastSoundPlayed = millis();
+        }
+      }
 
-    for (int i = 0; i < 64; i++) {
-      leds[i] = backgroundColor;
-    }
+      for (int i = 0; i < 64; i++) {
+        leds[i] = backgroundColor;
+      }
 
-    drawCo2Value(foregroundColor);
+      drawCo2Value(foregroundColor);
+    }
+    FastLED.show();
   }
-  FastLED.show();
-  delay(200);
+
+  handleBleGadgetEvents();
 }
 
 void buttonISR() {
