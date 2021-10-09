@@ -105,19 +105,23 @@ void setup() {
 void loop() {
   if (millis() - acquireDataLoopTimer >= acquireDataIntervalMs) {
     acquireDataLoopTimer = millis();
-    co2Level = measureCo2Level();
-    co2Value = co2Level / 1000.0;
-    if (co2Value < 0.995) {
-      // round to 2 fractional digits as we display 2, >=0.995 is rounded up to 1.0
-      // Value 0.994000, rounded value 0.990000 -> display ',99'
-      // ----
-      // Value 0.995000, rounded value 1.000000 -> display '1,0'
-      co2Value = round(co2Value * 100.0) / 100.0;
-    } else {
-      // round to 1 fractional digit as we display only 1
-      co2Value = round(co2Value * 10.0) / 10.0;
+    int co2Reading = measureCo2Level();
+    // values >10k indicate faulty readings (e.g. I2C communication error) -> skip them
+    if (co2Reading > 0 && co2Reading < 10000) {
+      co2Level = co2Reading;
+      co2Value = co2Level / 1000.0;
+      if (co2Value < 0.995) {
+        // round to 2 fractional digits as we display 2, >=0.995 is rounded up to 1.0
+        // Value 0.994000, rounded value 0.990000 -> display ',99'
+        // ----
+        // Value 0.995000, rounded value 1.000000 -> display '1,0'
+        co2Value = round(co2Value * 100.0) / 100.0;
+      } else {
+        // round to 1 fractional digit as we display only 1
+        co2Value = round(co2Value * 10.0) / 10.0;
+      }
+      log_i("CO2 (ppm): %d, rounded value: %f", co2Level, co2Value);
     }
-    log_i("CO2 (ppm): %d, rounded value: %f", co2Level, co2Value);
   }
   if (millis() - ledLoopTimer >= ledUpdateIntervalMs) {
     ledLoopTimer = millis();
